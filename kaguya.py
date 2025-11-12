@@ -9,6 +9,8 @@ import sys # For sys.exit
 from typing import List, Dict, Tuple, Optional, Any, NamedTuple, Set, Callable
 import base64 # For GitHubJSONUploader
 
+import concurrent.futures
+
 from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
 from rich.console import Console
@@ -1049,27 +1051,103 @@ def run_chapter_upload_processing() -> Optional[Dict[str, Any]]:
         console.print("[bold underline]🚀 Starting chapter image uploads via ImgChest...[/bold underline]")
         progress_columns = [ SpinnerColumn(finished_text="[green]✓[/green]"), TextColumn("[progress.description]{task.description}", justify="left"), BarColumn(bar_width=None), TextColumn("[progress.percentage]{task.percentage:>3.1f}%"), TextColumn("• {task.completed} of {task.total} •"), ConditionalTransferSpeedColumn(), ConditionalFileSizeColumn(), CustomTimeDisplayColumn()]
         progress_bar_manager = Progress(*progress_columns, console=console, transient=False, expand=True)
-
+ 
         with Live(progress_bar_manager, console=console, refresh_per_second=10, vertical_overflow="visible") as live:
             overall_task_id = progress_bar_manager.add_task("[bold #AAAAFF]Overall ImgChest Upload Progress[/bold #AAAAFF]", total=len(folders_to_process), fields={"is_byte_task": False})
-
+ 
+            # Partition folders into those already recorded (may require user prompt) and new ones we can upload concurrently.
+            pending_to_upload = []
+            recorded_to_handle = []
             for folder_item in folders_to_process:
+                if folder_item.name in uploaded_chapter_record:
+                    recorded_to_handle.append(folder_item)
+                else:
+                    pending_to_upload.append(folder_item)
+ 
+            # Preserve existing behavior for folders already present in the upload record (keeps user prompt)
+            for folder_item in recorded_to_handle:
                 chapter_processing_status = process_single_chapter_folder(
                     folder_item, base_folder_path, uploaded_chapter_record,
                     progress_bar_manager, live, manga_json_data, manga_main_groups,
                     manga_json_file_path, imgchest_api_key
                 )
-
+ 
                 if chapter_processing_status == CHAPTER_PROC_UPLOAD_SUCCESS:
                     newly_uploaded_or_reuploaded_count += 1
                 elif chapter_processing_status == CHAPTER_PROC_SKIPPED_EXISTING_USER_CONFIRMED:
                     user_confirmed_skipped_count += 1
-
+ 
                 save_upload_record(base_folder_path, uploaded_chapter_record, live)
                 if any(t.id == overall_task_id for t in progress_bar_manager.tasks):
                     progress_bar_manager.update(overall_task_id, advance=1)
                 live.console.line()
-
+ 
+            # Upload new/unrecorded folders concurrently
+            if pending_to_upload:
+                live.console.print(f"[dim]Uploading {len(pending_to_upload)} new folder(s) concurrently...[/dim]")
+                max_workers = min(4, len(pending_to_upload))
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    future_to_folder = {
+                        executor.submit(
+                            upload_all_images_for_chapter_to_host,
+                            get_image_files(folder.path, live),
+                            imgchest_api_key,
+                            folder.name,
+                            progress_bar_manager,
+                            live,
+                        ): folder
+                        for folder in pending_to_upload
+                    }
+ 
+                    for fut in concurrent.futures.as_completed(future_to_folder):
+                        folder = future_to_folder[fut]
+                        try:
+                            res = fut.result()
+                        except Exception as e:
+                            live.console.print(f"[red]Upload raised exception for '{folder.name}': {e}[/red]")
+                            res = {"success": False, "error": str(e)}
+ 
+                        if res.get("success"):
+                            post_id = res.get("post_id")
+                            album_url = res.get("album_url")
+                            total_uploaded = res.get("total_uploaded", 0)
+ 
+                            # Update upload record
+                            uploaded_chapter_record[folder.name] = {
+                                "album_url": album_url,
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "image_count": str(total_uploaded),
+                                "post_id": post_id
+                            }
+ 
+                            # Update manga_json_data with proxy entry and chapter meta (same as sequential path)
+                            chapter_info = parse_folder_name(folder.name)
+                            final_chapter_key = chapter_info.chapter
+                            proxy_path = f"/proxy/api/imgchest/chapter/{post_id}" if post_id else None
+                            ch_data: Dict[str, Any] = {
+                                "title": chapter_info.title,
+                                "last_updated": str(int(time.time())),
+                                "groups": {manga_main_groups: proxy_path}
+                            }
+                            if chapter_info.volume:
+                                ch_data["volume"] = chapter_info.volume
+                            manga_json_data['chapters'][final_chapter_key] = ch_data
+ 
+                            # Persist after each successful chapter update
+                            save_manga_json(manga_json_file_path, manga_json_data, live)
+ 
+                            live.console.print(f"[green]Uploaded '{folder.name}' -> {album_url} ({total_uploaded} images).[/green]")
+                            newly_uploaded_or_reuploaded_count += 1
+                        else:
+                            live.console.print(f"[red]Upload failed for '{folder.name}': {res.get('error', 'Unknown')}[/red]")
+ 
+                        # Persist upload record and advance overall progress
+                        save_upload_record(base_folder_path, uploaded_chapter_record, live)
+                        if any(t.id == overall_task_id for t in progress_bar_manager.tasks):
+                            progress_bar_manager.update(overall_task_id, advance=1)
+                        live.console.line()
+ 
+            # Finalize overall progress bar
             if any(t.id == overall_task_id for t in progress_bar_manager.tasks):
                 progress_bar_manager.update(overall_task_id, completed=len(folders_to_process), description="[bold green]Overall ImgChest Upload Progress Complete[/bold green]")
             live.console.line()
