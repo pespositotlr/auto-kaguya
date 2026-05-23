@@ -1,0 +1,4 @@
+proceed_with_uploads=y
+skip_reupload=n
+upload_to_github=y
+github_subfolder=

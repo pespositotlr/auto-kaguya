@@ -53,6 +53,34 @@ CHAPTER_PROC_ERROR_UPLOAD_FAILED = "ERROR_UPLOAD_FAILED"
 GITHUB_CONFIG_FILE = "github.txt"
 CUBARI_URLS_FILE = "cubari_urls.txt"
 
+# --- Auto-confirm Config (auto.txt) ---
+AUTO_CONFIG_FILE = Path("auto.txt")
+
+def load_auto_config(file_path: Path = AUTO_CONFIG_FILE) -> dict:
+    config = {}
+    if not file_path.exists():
+        return config
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line: continue
+                key, value = line.split('=', 1)
+                config[key.strip().lower()] = value.strip().lower()
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not read {file_path}: {e}[/yellow]")
+    return config
+
+def auto_input(prompt: str, config: dict, config_key: str, default_if_missing: str = "") -> str:
+    if config_key in config:
+        auto_val = config[config_key]
+        console.print(f"{prompt}[dim](auto: {auto_val})[/dim]")
+        return auto_val
+    return console.input(prompt)
+
+_auto_config: dict = load_auto_config()
+
+
 
 # --- NamedTuples for structured data ---
 class ChapterInfo(NamedTuple):
@@ -776,7 +804,7 @@ def process_single_chapter_folder(
         console.line()
         console.print(f"[yellow]⚠️ Chapter folder '{folder_details.name}' found in upload record ({UPLOAD_RECORD_FILE})![/yellow]")
         console.print(f"   URL: {existing_record['album_url']} Date: {existing_record['timestamp']} Images: {existing_record.get('image_count', 'N/A')}")
-        skip_choice = console.input(f"\n[bold yellow]Skip re-uploading '{folder_details.name}'? (Y/n):[/bold yellow] ").strip().lower()
+        skip_choice = auto_input(f"\n[bold yellow]Skip re-uploading '{folder_details.name}'? (Y/n):[/bold yellow] ", _auto_config, 'skip_reupload').strip().lower()
         console.line()
         if current_live_status: live.start(refresh=True)
 
@@ -1041,7 +1069,7 @@ def run_chapter_upload_processing() -> Optional[Dict[str, Any]]:
         console.print(f"[bold underline]Will process using [cyan]ImgChest[/cyan]:[/bold underline]")
         for fd in folders_to_process: console.print(f"  - {fd.name}")
         console.line()
-        if console.input("[bold yellow]Proceed with chapter image uploads? (y/N):[/bold yellow] ").strip().lower() != 'y':
+        if auto_input("[bold yellow]Proceed with chapter image uploads? (y/N):[/bold yellow] ", _auto_config, 'proceed_with_uploads').strip().lower() != 'y':
             console.print("[yellow]Chapter image upload processing canceled by user.[/yellow]")
             save_manga_json(manga_json_file_path, manga_json_data)
             console.line()
@@ -1231,7 +1259,7 @@ def main():
     if is_github_only_mode:
         console.print(f"[info]GitHub-only mode selected. Will attempt to upload '{manga_json_local_path.name}'.[/info]")
         proceed_with_github = True
-    elif console.input(f"[bold cyan]Upload/Update manga JSON '[white]{manga_json_local_path.name}[/white]' on GitHub? (y/N):[/bold cyan] ").strip().lower() == 'y':
+    elif auto_input(f"[bold cyan]Upload/Update manga JSON '[white]{manga_json_local_path.name}[/white]' on GitHub? (y/N):[/bold cyan] ", _auto_config, 'upload_to_github').strip().lower() == 'y':
         proceed_with_github = True
 
     if proceed_with_github:
@@ -1253,7 +1281,7 @@ def main():
             f"[cyan]Enter target subfolder in GitHub repo for '[white]{manga_json_local_path.name}[/white]' "
             f"(e.g., 'manga/seriesX').\nPress Enter for default (repository root): [/cyan]"
         )
-        repo_subfolder = console.input(repo_subfolder_prompt).strip()
+        repo_subfolder = auto_input(repo_subfolder_prompt, _auto_config, 'github_subfolder').strip()
         console.line()
 
         repo_file_path_parts = [p.strip('/') for p in [repo_subfolder, manga_json_local_path.name] if p.strip('/')]

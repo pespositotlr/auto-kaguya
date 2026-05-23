@@ -1,0 +1,22 @@
+# auto.txt — Auto-confirm settings for kaguya.py
+# Copy this file to auto.txt and set your preferred defaults.
+# Lines starting with # are comments and are ignored.
+# Keys are case-insensitive. Values: y = yes, n = no, blank = ask me every time.
+
+# 1. "Proceed with chapter image uploads? (y/N)"
+#    Set to y to always proceed, n to always cancel, or leave blank to be asked.
+proceed_with_uploads=y
+
+# 2. "Skip re-uploading '[chapter]'? (Y/n)"
+#    The default in kaguya is Y (skip). Set to n to always RE-upload (replace),
+#    or leave blank to be asked each time.
+skip_reupload=n
+
+# 3. "Upload/Update manga JSON on Github? (y/N)"
+#    Set to y to always upload to GitHub after a session, n to never, or blank to ask.
+upload_to_github=y
+
+# 4. "Enter target subfolder in GitHub repo ... Press Enter for root"
+#    Set to the subfolder path you always use, or leave blank to use the repo root.
+#    Example: github_subfolder=manga/jojolands
+github_subfolder=

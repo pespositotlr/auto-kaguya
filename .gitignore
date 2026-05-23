@@ -1,0 +1,25 @@
+# MangaDex Uploader — .gitignore
+ 
+# ── Credentials (NEVER commit this) ──────────────────
+auth.toml
+Instructions.txt
+*.toml
+series_config.json
+api_key.txt
+cubari_urls.txt
+github.txt
+ 
+# ── Python ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+ 
+# ── OS junk ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# Local release link cache
+release_links.txt
