@@ -42,6 +42,7 @@ MANGA_INFO_FILE = "info.txt"
 IMAGE_EXTENSIONS: Set[str] = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff"}
 IMGCHEST_API_BASE_URL = "https://api.imgchest.com/v1"
 MAX_IMAGES_PER_BATCH = 20
+CUBARI_PROXY_PAGE_LIMIT = 40
 
 # Chapter Processing Status Constants
 CHAPTER_PROC_UPLOAD_SUCCESS = "UPLOAD_SUCCESS"
@@ -353,6 +354,35 @@ def add_images_to_existing_album_on_host(image_files_batch: List[Path], post_id:
     if result['success']:
         return {'success': True, 'added_images': len(image_files_batch)}
     return result
+
+def cubari_chapter_source(post_id: str, image_count: Any, api_key: Optional[str]) -> Any:
+    """What goes in a chapter's group in manga.json. Cubari's ImgChest proxy stops at
+    CUBARI_PROXY_PAGE_LIMIT pages, so longer albums are listed image by image instead."""
+    proxy_path = f"/proxy/api/imgchest/chapter/{post_id}"
+    try:
+        if int(image_count) <= CUBARI_PROXY_PAGE_LIMIT:
+            return proxy_path
+    except (TypeError, ValueError):
+        pass
+    if not api_key:
+        console.print(f"[yellow]Warning: No ImgChest key, so album {post_id} stays a proxy link and Cubari will show {CUBARI_PROXY_PAGE_LIMIT} pages at most.[/yellow]")
+        return proxy_path
+    for attempt in range(3):
+        try:
+            response = requests.get(f"{IMGCHEST_API_BASE_URL}/post/{post_id}", headers={"Authorization": f"Bearer {api_key}"}, timeout=60)
+            if response.status_code == 429:
+                time.sleep(30)
+                continue
+            response.raise_for_status()
+            images = response.json()["data"]["images"]
+            if len(images) <= CUBARI_PROXY_PAGE_LIMIT:
+                return proxy_path
+            return [f"{image['link']}?_w." for image in sorted(images, key=lambda image: image["position"])]
+        except (requests.RequestException, KeyError, ValueError) as e:
+            console.print(f"[yellow]Warning: Could not read album {post_id} (try {attempt + 1}/3): {e}[/yellow]")
+            time.sleep(5)
+    console.print(f"[red]❌ Album {post_id} stays a proxy link, so Cubari will show {CUBARI_PROXY_PAGE_LIMIT} pages at most.[/red]")
+    return proxy_path
 
 def chunk_list(lst: List[Any], chunk_size: int) -> List[List[Any]]:
     return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
@@ -834,12 +864,12 @@ def process_single_chapter_folder(
         if final_chapter_key in manga_json_data_to_update['chapters']:
             live.console.print(f"[yellow]Note: Chapter key '{final_chapter_key}' already exists in manga.json. It will be overwritten.[/yellow]")
 
-        proxy_path = f"/proxy/api/imgchest/chapter/{upload_res['post_id']}"
+        chapter_source = cubari_chapter_source(upload_res['post_id'], upload_res['total_uploaded'], imgchest_api_key)
 
         ch_data: Dict[str, Any] = {
             "title": chapter_info.title,
             "last_updated": str(int(time.time())),
-            "groups": {manga_main_groups_info: proxy_path}
+            "groups": {manga_main_groups_info: chapter_source}
         }
         if chapter_info.volume:
             ch_data["volume"] = chapter_info.volume
@@ -892,6 +922,7 @@ def regenerate_manga_json_from_folders(
     """Rebuilds the manga_json_data['chapters'] from the current subfolders and the upload record, then saves it."""
     output_func = live.console.print if live else console.print
     output_func(f"[dim]Regenerating manga.json for: {base_folder_path}[/dim]")
+    imgchest_api_key = load_api_key()
     if 'chapters' not in manga_json_data:
         manga_json_data['chapters'] = {}
     # Start fresh
@@ -901,12 +932,12 @@ def regenerate_manga_json_from_folders(
         chapter_info = parse_folder_name(fd.name)
         final_chapter_key = chapter_info.chapter
 
-        proxy_groups: Dict[str, str] = {}
+        proxy_groups: Dict[str, Any] = {}
         post_id = None
         if fd.name in uploaded_chapter_record:
             post_id = uploaded_chapter_record[fd.name].get('post_id')
             if post_id:
-                proxy_groups = {manga_main_groups: f"/proxy/api/imgchest/chapter/{post_id}"}
+                proxy_groups = {manga_main_groups: cubari_chapter_source(post_id, uploaded_chapter_record[fd.name].get('image_count'), imgchest_api_key)}
 
             ts_str = uploaded_chapter_record[fd.name].get('timestamp')
             try:
@@ -1151,11 +1182,11 @@ def run_chapter_upload_processing() -> Optional[Dict[str, Any]]:
                             # Update manga_json_data with proxy entry and chapter meta (same as sequential path)
                             chapter_info = parse_folder_name(folder.name)
                             final_chapter_key = chapter_info.chapter
-                            proxy_path = f"/proxy/api/imgchest/chapter/{post_id}" if post_id else None
+                            chapter_source = cubari_chapter_source(post_id, total_uploaded, imgchest_api_key) if post_id else None
                             ch_data: Dict[str, Any] = {
                                 "title": chapter_info.title,
                                 "last_updated": str(int(time.time())),
-                                "groups": {manga_main_groups: proxy_path}
+                                "groups": {manga_main_groups: chapter_source}
                             }
                             if chapter_info.volume:
                                 ch_data["volume"] = chapter_info.volume
